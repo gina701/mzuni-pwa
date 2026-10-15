@@ -1,0 +1,12 @@
+{
+  "name": "MZUNI Study Circle",
+  "short_name": "Study Circle",
+  "description": "Communication Studies group learning at MZUNI",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f7f9fc",
+  "theme_color": "#153d8a",
+  "icons": [
+    {"src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable"}
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "name": "mzuni-communication-studies-pwa",
+  "version": "1.0.0",
+  "description": "MZUNI Communication Studies group-study PWA",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.2",
+    "multer": "^1.4.5-lts.1",
+    "ws": "^8.18.0",
+    "dotenv": "^16.4.7"
+  }
+}
