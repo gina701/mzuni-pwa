@@ -12,7 +12,7 @@ A mobile-friendly Progressive Web App for MZUNI Communication Studies students.
   - Communication Theory
   - English for Academic Purposes
 - Admin-only upload, review, approval, rejection and deletion of learning resources
-- Persistent application data and uploaded files, using the local filesystem for development and Supabase for hosting
+- JSON data and uploaded files stored on the local filesystem
 - Study-room creation and invitation codes
 - WebRTC audio/video signalling, with a four-participant room limit
 - PWA manifest, service worker and app icon
@@ -29,7 +29,7 @@ A mobile-friendly Progressive Web App for MZUNI Communication Studies students.
 1. Extract this ZIP into a **new folder**. Do not extract over an existing project.
 2. Install Node.js LTS from https://nodejs.org/ if you do not already have it.
 3. Open the extracted `mzuni-communication-studies-pwa` folder.
-4. Copy `.env.example` to a new file named `.env` and change `ADMIN_EMAIL`, `ADMIN_PASSWORD`, and `JWT_SECRET` before the first run. The app loads this file automatically.
+4. Copy `.env.example` to a new file named `.env` and set your own `ADMIN_EMAIL`, `ADMIN_PASSWORD`, and `JWT_SECRET` before the first run. The app loads this file automatically.
 5. Open Command Prompt in the project folder and run:
 
    ```bat
@@ -80,36 +80,16 @@ WebRTC media travels between browsers where possible. The Node server relays cal
 
 The four-person limit is enforced by the signalling server for each active room. If the server restarts, active calls disconnect; students can create/join a room again.
 
-## Persistent storage and deployment warning
-
-- Locally, `data/database.json` stores account records, material metadata and rooms, and `uploads/` stores course files.
-- On Render's free Web Service, the local filesystem is temporary. Configure Supabase database and Storage using the steps below to keep records and uploaded files across restarts and deploys.
-- Passwords are hashed with bcryptjs.
-- The JSON file is suitable for a small pilot, not heavy simultaneous production use.
-- The hosted JSON state is stored in one Supabase JSONB row; this is suitable for a small pilot, not heavy concurrent use.
-- Supabase free-plan quotas and inactivity policies apply and can change. The upload bucket is public so students can open course files; anyone with a file URL can access that file.
-- Live room signalling stays in the web process, so keep one Render instance. Calls disconnect when the free service sleeps or restarts; students can rejoin.
-- Back up your Supabase project regularly. Never commit real student records, uploaded files, secrets, or service-role keys to a public GitHub repository.
-- Use HTTPS, strong secrets, backups, moderation rules and a privacy notice before real student use.
-
 ## Free deployment on Render
 
-### Set up Supabase storage
+1. Push this project to GitHub. In Render choose **New > Web Service**, connect the repository, and select the **Free** instance type.
+2. Set the build command to `npm install` and the start command to `npm start`.
+3. In the service's **Environment** settings, add `ADMIN_EMAIL` and `ADMIN_PASSWORD` (at least 12 characters). Optionally set `ADMIN_NAME` and `JWT_SECRET`; if `JWT_SECRET` is omitted, the app creates a random one when it starts.
+4. Deploy and open the HTTPS URL Render assigns. No Blueprint, database, storage provider, or other service is required.
 
-1. Create a Supabase project on its free plan, if its current quotas and inactivity policies meet your needs.
-2. In Supabase **SQL Editor**, run [`supabase/schema.sql`](./supabase/schema.sql) to create and seed the private app-state table.
-3. In **Storage**, create a bucket named `study-uploads`, set it to **Public**, set its file size limit to **15 MB**, and allow these MIME types: `application/pdf`, `application/msword`, `application/vnd.openxmlformats-officedocument.wordprocessingml.document`, `application/vnd.ms-powerpoint`, `application/vnd.openxmlformats-officedocument.presentationml.presentation`, `text/plain`, `image/jpeg`, and `image/png`.
-4. In **Project Settings > API**, copy the Project URL and the `service_role` secret key. Keep the service-role key private; it must only be set on the server, never in browser code.
+**Important: this simple free setup does not keep data permanently.** Accounts, rooms, and uploaded course files are stored on Render's temporary filesystem and may be erased when Render replaces the instance, restarts, or redeploys it. If that happens, the first admin account is seeded again and students need to register again. App features work while the service is running, but persistent user data requires a storage service or a paid persistent disk. The free service may sleep while idle; active calls disconnect during sleep/restarts. The service uses Render's `PORT` and supports WebSocket signalling.
 
-### Create the free Render Web Service
-
-1. Push this project to GitHub. In Render choose **New > Web Service** (not Blueprint), connect the repository, and select the **Free** instance type.
-2. Set the build command to `npm install` and the start command to `npm start`. The app binds to Render's `PORT`; `/api/health` can be used as the health-check path.
-3. In the service's **Environment** settings, add `NODE_ENV=production`, `JWT_SECRET` (a long random secret), `ADMIN_EMAIL`, `ADMIN_PASSWORD` (at least 12 characters), `SUPABASE_URL`, and `SUPABASE_SERVICE_ROLE_KEY`.
-4. Optionally set `ADMIN_NAME`, `TURN_URL`, `TURN_USERNAME`, and `TURN_CREDENTIAL`. Audio/video uses HTTPS, the browser's microphone/camera, and the included public STUN server. Some networks require a TURN service.
-5. Deploy and open the HTTPS URL Render assigns. Registration, sign-in, resource uploads and review, rooms, and WebSocket call signalling run in the web service. User records and course files are kept in Supabase, not on Render's temporary disk.
-
-Render's free service may sleep when idle and has limited build/runtime hours. When it wakes, persisted accounts and files remain available through Supabase, but active calls disconnect. The service uses Render's `PORT` and supports WebSocket signalling. Keep one instance so live room signalling works as expected.
+Passwords are hashed with bcryptjs. The local JSON database is suitable for a small pilot, not heavy simultaneous production use. Never commit real student records, uploaded files, or secrets to a public GitHub repository. Use strong credentials, HTTPS, moderation rules, and a privacy notice before real student use.
 
 ## Project layout
 
@@ -121,8 +101,6 @@ mzuni-communication-studies-pwa/
 ├── .env.example
 ├── data/                 # created automatically at runtime
 ├── uploads/              # created automatically at runtime
-├── supabase/
-│   └── schema.sql
 └── public/
     ├── index.html
     ├── styles.css

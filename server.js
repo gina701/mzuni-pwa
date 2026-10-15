@@ -14,18 +14,11 @@ const server = http.createServer(app);
 const wss = new WebSocket.Server({ noServer: true });
 const PORT = Number(process.env.PORT || 3000);
 const DATA_DIR = path.join(__dirname, "data");
-const UPLOAD_DIR = path.resolve(process.env.UPLOAD_DIR || path.join(__dirname, "uploads"));
+const UPLOAD_DIR = path.join(__dirname, "uploads");
 const DB_FILE = path.join(DATA_DIR, "database.json");
-const JWT_SECRET = process.env.JWT_SECRET || "development-only-change-this-secret";
-const SUPABASE_URL = (process.env.SUPABASE_URL || "").replace(/\/+$/, "");
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
-const SUPABASE_BUCKET = "study-uploads";
-if (Boolean(SUPABASE_URL) !== Boolean(SUPABASE_SERVICE_ROLE_KEY)) {
-  throw new Error("Configure both SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY, or leave both unset for local development.");
-}
-const useSupabase = Boolean(SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY);
+const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(48).toString("hex");
 if (process.env.NODE_ENV === "production") {
-  const missing = ["JWT_SECRET", "ADMIN_EMAIL", "ADMIN_PASSWORD", "SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY"].filter(key => !process.env[key]);
+  const missing = ["ADMIN_EMAIL", "ADMIN_PASSWORD"].filter(key => !process.env[key]);
   if (missing.length) throw new Error(`Missing required production environment variables: ${missing.join(", ")}`);
   if (process.env.ADMIN_PASSWORD.length < 12) throw new Error("ADMIN_PASSWORD must be at least 12 characters in production.");
 }
@@ -36,85 +29,21 @@ const COURSES = [
   "English for Academic Purposes"
 ];
 
-const emptyDB = () => ({ users: [], materials: [], rooms: [] });
-let database = null;
-let writeQueue = Promise.resolve();
-
-async function supabaseRequest(endpoint, options = {}) {
-  const response = await fetch(`${SUPABASE_URL}${endpoint}`, {
-    ...options,
-    headers: {
-      apikey: SUPABASE_SERVICE_ROLE_KEY,
-      Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
-      ...(options.body && !(options.body instanceof Buffer) ? { "Content-Type": "application/json" } : {}),
-      ...(options.headers || {})
-    }
-  });
-  if (!response.ok) {
-    const detail = await response.text();
-    throw new Error(`Supabase request failed (${response.status}): ${detail || response.statusText}`);
-  }
-  if (response.status === 204) return null;
-  const text = await response.text();
-  return text ? JSON.parse(text) : null;
-}
-
-async function initializeDB() {
-  if (useSupabase) {
-    const rows = await supabaseRequest("/rest/v1/app_state?id=eq.1&select=state");
-    if (!Array.isArray(rows) || !rows[0]?.state) throw new Error("Supabase app_state is missing its initial row. Run supabase/schema.sql.");
-    database = rows[0].state;
-    return;
-  }
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-  if (!fs.existsSync(DB_FILE)) fs.writeFileSync(DB_FILE, JSON.stringify(emptyDB(), null, 2));
-  try { database = JSON.parse(fs.readFileSync(DB_FILE, "utf8")); }
-  catch (e) { console.error("Database read error:", e.message); throw new Error("Could not read database."); }
+fs.mkdirSync(DATA_DIR, { recursive: true });
+fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+if (!fs.existsSync(DB_FILE)) {
+  fs.writeFileSync(DB_FILE, JSON.stringify({ users: [], materials: [], rooms: [] }, null, 2));
 }
 function readDB() {
-  if (!database) throw new Error("Database has not been initialized.");
-  return database;
+  try { return JSON.parse(fs.readFileSync(DB_FILE, "utf8")); }
+  catch (e) { console.error("Database read error:", e.message); throw new Error("Could not read database."); }
 }
 function writeDB(db) {
-  if (useSupabase) {
-    const snapshot = JSON.stringify(db);
-    const save = writeQueue.catch(() => {}).then(() => supabaseRequest("/rest/v1/app_state?id=eq.1", {
-      method: "PATCH",
-      headers: { Prefer: "return=minimal" },
-      body: JSON.stringify({ state: JSON.parse(snapshot) })
-    }));
-    writeQueue = save;
-    return save;
-  }
   const temp = DB_FILE + ".tmp";
   fs.writeFileSync(temp, JSON.stringify(db, null, 2));
   fs.renameSync(temp, DB_FILE);
-  return Promise.resolve();
-}
-function storedFileUrl(fileName) {
-  if (useSupabase) return `${SUPABASE_URL}/storage/v1/object/public/${SUPABASE_BUCKET}/${encodeURIComponent(fileName)}`;
-  return `/uploads/${encodeURIComponent(fileName)}`;
-}
-async function uploadStoredFile(file) {
-  const ext = path.extname(file.originalname).slice(0, 12).replace(/[^.a-zA-Z0-9]/g, "");
-  const fileName = crypto.randomUUID() + ext;
-  if (useSupabase) {
-    await supabaseRequest(`/storage/v1/object/${SUPABASE_BUCKET}/${encodeURIComponent(fileName)}`, {
-      method: "POST",
-      headers: { "Content-Type": file.mimetype, "x-upsert": "false" },
-      body: file.buffer
-    });
-  } else {
-    fs.writeFileSync(path.join(UPLOAD_DIR, fileName), file.buffer);
-  }
-  return fileName;
 }
 async function deleteStoredFile(fileName) {
-  if (useSupabase) {
-    await supabaseRequest(`/storage/v1/object/${SUPABASE_BUCKET}/${encodeURIComponent(path.basename(fileName))}`, { method: "DELETE" });
-    return;
-  }
   await fs.promises.unlink(path.join(UPLOAD_DIR, path.basename(fileName))).catch(err => {
     if (err.code !== "ENOENT") throw err;
   });
@@ -149,7 +78,7 @@ function cleanText(value, max = 180) {
 
 app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: false }));
-if (!useSupabase) app.use("/uploads", express.static(UPLOAD_DIR, { fallthrough: false }));
+app.use("/uploads", express.static(UPLOAD_DIR, { fallthrough: false }));
 app.use(express.static(path.join(__dirname, "public")));
 
 async function seedAdmin() {
@@ -162,7 +91,7 @@ async function seedAdmin() {
       email, passwordHash: await bcrypt.hash(password, 12), role: "admin",
       createdAt: new Date().toISOString()
     });
-    await writeDB(db);
+    writeDB(db);
     console.log("Initial admin created:", email);
     if (!process.env.ADMIN_PASSWORD) console.warn("WARNING: Set ADMIN_PASSWORD before using this app publicly.");
   }
@@ -200,13 +129,20 @@ app.get("/api/auth/me", auth, (req, res) => res.json({ user: publicUser(req.user
 
 app.get("/api/materials", auth, (req, res) => {
   const db = readDB();
-  res.json(db.materials.filter(m => m.status === "approved").sort((a,b) => b.createdAt.localeCompare(a.createdAt)).map(m => ({ ...m, fileUrl: storedFileUrl(m.fileName) })));
+  res.json(db.materials.filter(m => m.status === "approved").sort((a,b) => b.createdAt.localeCompare(a.createdAt)).map(m => ({ ...m, fileUrl: `/uploads/${encodeURIComponent(m.fileName)}` })));
 });
 app.get("/api/admin/materials", auth, adminOnly, (req, res) => {
-  res.json(readDB().materials.sort((a,b) => b.createdAt.localeCompare(a.createdAt)).map(m => ({ ...m, fileUrl: storedFileUrl(m.fileName) })));
+  res.json(readDB().materials.sort((a,b) => b.createdAt.localeCompare(a.createdAt)).map(m => ({ ...m, fileUrl: `/uploads/${encodeURIComponent(m.fileName)}` })));
+});
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, UPLOAD_DIR),
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname).slice(0, 12).replace(/[^.a-zA-Z0-9]/g, "");
+    cb(null, crypto.randomUUID() + ext);
+  }
 });
 const upload = multer({
-  storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 },
+  storage, limits: { fileSize: 15 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     const allowed = /\.(pdf|doc|docx|ppt|pptx|txt|jpg|jpeg|png)$/i.test(file.originalname);
     cb(allowed ? null : new Error("Allowed file types: PDF, Word, PowerPoint, TXT, JPG and PNG."), allowed);
@@ -216,24 +152,24 @@ app.post("/api/admin/materials", auth, adminOnly, upload.single("file"), asyncRo
   const title = cleanText(req.body.title, 140);
   const course = cleanText(req.body.course, 100);
   if (!title || !COURSES.includes(course) || !req.file) {
+    if (req.file) await deleteStoredFile(req.file.filename);
     return res.status(400).json({ error: "Provide a title, a valid course and a file." });
   }
-  const fileName = await uploadStoredFile(req.file);
   const db = readDB();
   const item = {
     id: crypto.randomUUID(), title, course, description: cleanText(req.body.description, 600),
-    originalName: path.basename(req.file.originalname), fileName,
+    originalName: path.basename(req.file.originalname), fileName: req.file.filename,
     mimeType: req.file.mimetype, size: req.file.size, status: "pending",
     uploadedBy: req.user.name, createdAt: new Date().toISOString()
   };
   try {
     db.materials.push(item);
-    await writeDB(db);
+    writeDB(db);
   } catch (err) {
-    await deleteStoredFile(fileName);
+    await deleteStoredFile(req.file.filename);
     throw err;
   }
-  res.status(201).json({ material: { ...item, fileUrl: storedFileUrl(item.fileName) }, message: "Uploaded for review. Approve it in the admin panel to make it visible to students." });
+  res.status(201).json({ material: { ...item, fileUrl: `/uploads/${encodeURIComponent(item.fileName)}` }, message: "Uploaded for review. Approve it in the admin panel to make it visible to students." });
 }));
 app.patch("/api/admin/materials/:id", auth, adminOnly, asyncRoute(async (req, res) => {
   const status = req.body.status;
@@ -242,7 +178,7 @@ app.patch("/api/admin/materials/:id", auth, adminOnly, asyncRoute(async (req, re
   const item = db.materials.find(m => m.id === req.params.id);
   if (!item) return res.status(404).json({ error: "Material not found." });
   item.status = status; item.reviewedAt = new Date().toISOString(); item.reviewedBy = req.user.name;
-  await writeDB(db);
+  writeDB(db);
   res.json({ material: item });
 }));
 app.delete("/api/admin/materials/:id", auth, adminOnly, asyncRoute(async (req, res) => {
@@ -250,7 +186,7 @@ app.delete("/api/admin/materials/:id", auth, adminOnly, asyncRoute(async (req, r
   const index = db.materials.findIndex(m => m.id === req.params.id);
   if (index < 0) return res.status(404).json({ error: "Material not found." });
   const [item] = db.materials.splice(index, 1);
-  await writeDB(db);
+  writeDB(db);
   await deleteStoredFile(item.fileName);
   res.json({ ok: true });
 }));
@@ -272,7 +208,7 @@ app.post("/api/rooms", auth, asyncRoute(async (req, res) => {
     title, course, hostId: req.user.id, hostName: req.user.name,
     status: "open", createdAt: new Date().toISOString()
   };
-  db.rooms.push(room); await writeDB(db);
+  db.rooms.push(room); writeDB(db);
   res.status(201).json(room);
 }));
 app.post("/api/rooms/join", auth, (req, res) => {
@@ -287,7 +223,7 @@ app.post("/api/rooms/:id/close", auth, asyncRoute(async (req, res) => {
   const room = db.rooms.find(r => r.id === req.params.id);
   if (!room) return res.status(404).json({ error: "Room not found." });
   if (room.hostId !== req.user.id && req.user.role !== "admin") return res.status(403).json({ error: "Only the room host can close it." });
-  room.status = "closed"; room.closedAt = new Date().toISOString(); await writeDB(db);
+  room.status = "closed"; room.closedAt = new Date().toISOString(); writeDB(db);
   broadcastRoom(room.id, { type: "room-closed" });
   res.json({ ok: true });
 }));
@@ -355,7 +291,6 @@ app.use((err, req, res, next) => {
   next();
 });
 app.get("*", (req, res) => res.sendFile(path.join(__dirname, "public", "index.html")));
-initializeDB()
-  .then(seedAdmin)
+seedAdmin()
   .then(() => server.listen(PORT, "0.0.0.0", () => console.log(`MZUNI Communication Studies PWA listening on port ${PORT}`)))
   .catch(err => { console.error("Admin setup failed:", err); process.exit(1); });
